@@ -25,7 +25,7 @@ function todayDateStr() {
 }
 
 const employees = ref([])
-const loading = ref(false)
+const loading = ref(true)
 
 const now = new Date()
 const cursorYear = ref(now.getFullYear())
@@ -110,7 +110,8 @@ const calendarCells = computed(() => {
 })
 
 async function saveCell(dateStr, empId) {
-  const cell = records[dateStr][empId]
+  const cell = records[dateStr]?.[empId]
+  if (!cell) return
   if (cell.hours === '' || cell.hours === null || Number(cell.hours) < 0) {
     if (cell.id) {
       const idToRemove = cell.id
@@ -134,7 +135,7 @@ async function saveCell(dateStr, empId) {
 }
 
 function markDirty(dateStr, empId) {
-  records[dateStr][empId].status = 'idle'
+  if (records[dateStr]?.[empId]) records[dateStr][empId].status = 'idle'
 }
 
 function wageOf(empId) {
@@ -246,22 +247,23 @@ onMounted(async () => {
                   <div class="day-emp-list">
                     <div v-for="emp in employees" :key="emp.id" class="day-emp-row">
                       <span class="day-emp-avatar">{{ avatarFor(emp.id) }}</span>
+                      <span class="day-emp-name">{{ emp.name }}</span>
                       <input
                         class="day-emp-input"
                         type="number"
                         step="0.5"
                         min="0"
                         placeholder="-"
-                        v-model="records[dateStr][emp.id].hours"
+                        v-model="getCell(dateStr, emp.id).hours"
                         @input="markDirty(dateStr, emp.id)"
                         @blur="saveCell(dateStr, emp.id)"
                       />
                       <span
-                        v-if="records[dateStr][emp.id].status === 'saving'"
+                        v-if="getCell(dateStr, emp.id).status === 'saving'"
                         class="day-emp-status"
                       >···</span>
                       <span
-                        v-else-if="records[dateStr][emp.id].status === 'error'"
+                        v-else-if="getCell(dateStr, emp.id).status === 'error'"
                         class="day-emp-status error"
                       >⚠</span>
                     </div>
@@ -347,9 +349,9 @@ onMounted(async () => {
 
 .weekday-row {
   display: grid;
-  grid-template-columns: repeat(7, minmax(96px, 1fr));
+  grid-template-columns: repeat(7, minmax(148px, 1fr));
   margin-bottom: 6px;
-  min-width: 672px;
+  min-width: 1036px;
 }
 
 .weekday {
@@ -370,9 +372,9 @@ onMounted(async () => {
 
 .calendar-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(96px, 1fr));
+  grid-template-columns: repeat(7, minmax(148px, 1fr));
   gap: 6px;
-  min-width: 672px;
+  min-width: 1036px;
 }
 
 .day-cell {
@@ -425,19 +427,29 @@ onMounted(async () => {
 }
 
 .day-emp-avatar {
-  font-size: 11px;
+  font-size: 12px;
   flex-shrink: 0;
 }
 
-.day-emp-input {
-  width: 0;
+.day-emp-name {
   flex: 1;
   min-width: 0;
+  font-size: 11px;
+  color: var(--text-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-emp-input {
+  width: 30px;
+  flex-shrink: 0;
   border: none;
   background: transparent;
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
+  text-align: right;
   padding: 1px 0;
 }
 
