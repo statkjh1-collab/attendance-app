@@ -14,7 +14,7 @@ const tabs = [
   <header class="navbar">
     <div class="brand">
       <span class="brand-icon">🐾</span>
-      <span class="brand-name">멍냥출근부</span>
+      <span class="brand-name">브라이튼독출근부</span>
     </div>
     <nav class="tabs">
       <RouterLink
