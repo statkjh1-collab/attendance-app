@@ -25,16 +25,24 @@ function avatarFor(id) {
   return avatars[hash % avatars.length]
 }
 
+const TAX_RATE = 0.033 // 3.3% 사업소득 원천징수 (소득세 3% + 지방소득세 0.3%)
+function taxOf(gross) {
+  return Math.floor(gross * TAX_RATE)
+}
+function netOf(gross) {
+  return gross - taxOf(gross)
+}
+
 async function load() {
   loading.value = true
   expandedId.value = null
   try {
     summary.value = await PayrollAPI.get(month.value)
-    await nextTick()
-    renderChart()
   } finally {
     loading.value = false
   }
+  await nextTick()
+  renderChart()
 }
 
 function renderChart() {
@@ -50,8 +58,8 @@ function renderChart() {
       labels: summary.value.map((s) => s.employee_name),
       datasets: [
         {
-          label: '월급 (원)',
-          data: summary.value.map((s) => s.total_pay),
+          label: '실지급액 (원)',
+          data: summary.value.map((s) => netOf(s.total_pay)),
           backgroundColor: '#7BA88C',
           borderRadius: 8,
         },
@@ -59,11 +67,19 @@ function renderChart() {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: (ctx) => `${Number(ctx.raw).toLocaleString('ko-KR')}원`,
+            label: (ctx) => {
+              const row = summary.value[ctx.dataIndex]
+              return [
+                `세전 급여: ${row.total_pay.toLocaleString('ko-KR')}원`,
+                `3.3% 공제: -${taxOf(row.total_pay).toLocaleString('ko-KR')}원`,
+                `실지급액: ${netOf(row.total_pay).toLocaleString('ko-KR')}원`,
+              ]
+            },
           },
         },
       },
@@ -100,6 +116,8 @@ function formatHm(iso) {
 
 const totalPay = computed(() => summary.value.reduce((sum, s) => sum + s.total_pay, 0))
 const totalDays = computed(() => summary.value.reduce((sum, s) => sum + s.work_days, 0))
+const totalTax = computed(() => summary.value.reduce((sum, s) => sum + taxOf(s.total_pay), 0))
+const totalNet = computed(() => summary.value.reduce((sum, s) => sum + netOf(s.total_pay), 0))
 
 watch(month, load)
 onMounted(load)
@@ -124,18 +142,30 @@ onMounted(load)
 
     <template v-else>
       <div class="card total-card">
-        <div>
-          <div class="text-sub">총 인건비</div>
-          <div class="amount total-amount">{{ totalPay.toLocaleString('ko-KR') }}원</div>
+        <div class="total-main">
+          <div class="text-sub">실지급 총액 (3.3% 공제 후)</div>
+          <div class="amount total-amount">{{ totalNet.toLocaleString('ko-KR') }}원</div>
         </div>
-        <div class="total-meta">
-          <div class="text-sub">근무일 합계</div>
-          <div>{{ totalDays }}일</div>
+        <div class="total-breakdown">
+          <div class="total-breakdown-row">
+            <span class="text-sub">세전 총 급여</span>
+            <span>{{ totalPay.toLocaleString('ko-KR') }}원</span>
+          </div>
+          <div class="total-breakdown-row">
+            <span class="text-sub">3.3% 공제액</span>
+            <span>-{{ totalTax.toLocaleString('ko-KR') }}원</span>
+          </div>
+          <div class="total-breakdown-row">
+            <span class="text-sub">근무일 합계</span>
+            <span>{{ totalDays }}일</span>
+          </div>
         </div>
       </div>
 
       <div class="card chart-card">
-        <canvas ref="chartCanvas" height="90"></canvas>
+        <div class="chart-wrap">
+          <canvas ref="chartCanvas"></canvas>
+        </div>
       </div>
 
       <div class="list">
@@ -149,7 +179,12 @@ onMounted(load)
               </div>
             </div>
             <div class="emp-row-pay">
-              <span class="amount">{{ row.total_pay.toLocaleString('ko-KR') }}원</span>
+              <div class="emp-row-pay-main">
+                <span class="amount">{{ netOf(row.total_pay).toLocaleString('ko-KR') }}원</span>
+                <span class="text-sub emp-row-pay-sub">
+                  세전 {{ row.total_pay.toLocaleString('ko-KR') }}원 · 3.3% 공제 -{{ taxOf(row.total_pay).toLocaleString('ko-KR') }}원
+                </span>
+              </div>
               <span class="chevron">{{ expandedId === row.employee_id ? '▲' : '▼' }}</span>
             </div>
           </div>
@@ -164,6 +199,8 @@ onMounted(load)
                   <th>퇴근</th>
                   <th>근무시간</th>
                   <th>급여</th>
+                  <th>3.3% 공제</th>
+                  <th>실지급액</th>
                 </tr>
               </thead>
               <tbody>
@@ -172,7 +209,9 @@ onMounted(load)
                   <td>{{ d.check_in ? formatHm(d.check_in) : '-' }}</td>
                   <td>{{ d.check_out ? formatHm(d.check_out) : '-' }}</td>
                   <td>{{ (d.worked_minutes / 60).toFixed(1) }}시간</td>
-                  <td class="amount">{{ d.pay.toLocaleString('ko-KR') }}원</td>
+                  <td>{{ d.pay.toLocaleString('ko-KR') }}원</td>
+                  <td>-{{ taxOf(d.pay).toLocaleString('ko-KR') }}원</td>
+                  <td class="amount">{{ netOf(d.pay).toLocaleString('ko-KR') }}원</td>
                 </tr>
               </tbody>
             </table>
@@ -210,18 +249,36 @@ onMounted(load)
   justify-content: space-between;
   align-items: center;
   margin-bottom: 14px;
+  flex-wrap: wrap;
+  gap: 14px;
 }
 
 .total-amount {
   font-size: 26px;
 }
 
-.total-meta {
+.total-breakdown {
   text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.total-breakdown-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .chart-card {
   margin-bottom: 14px;
+}
+
+.chart-wrap {
+  position: relative;
+  width: 100%;
+  height: 220px;
 }
 
 .list {
@@ -268,6 +325,17 @@ onMounted(load)
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.emp-row-pay-main {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.emp-row-pay-sub {
+  font-size: 11px;
 }
 
 .chevron {
