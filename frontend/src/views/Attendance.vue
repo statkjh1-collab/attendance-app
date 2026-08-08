@@ -25,48 +25,49 @@ function todayDateStr() {
 }
 
 const employees = ref([])
-const selectedId = ref(null)
 const loading = ref(false)
 
 const now = new Date()
 const cursorYear = ref(now.getFullYear())
 const cursorMonth = ref(now.getMonth()) // 0-indexed
 
-const dayData = reactive({}) // 'YYYY-MM-DD' -> { id, hours, status }
+// records[dateStr][employeeId] = { id, hours, status }
+const records = reactive({})
 
-const selectedEmployee = computed(() => employees.value.find((e) => e.id === selectedId.value))
 const monthLabel = computed(() => `${cursorYear.value}년 ${cursorMonth.value + 1}월`)
 const monthStr = computed(() => `${cursorYear.value}-${pad2(cursorMonth.value + 1)}`)
 const todayStr = todayDateStr()
 
 async function loadEmployees() {
   employees.value = await EmployeesAPI.list(true)
-  if (!selectedId.value && employees.value.length) {
-    selectedId.value = employees.value[0].id
-  }
 }
 
-function resetDayData() {
-  for (const key of Object.keys(dayData)) delete dayData[key]
+function blankCell() {
+  return { id: null, hours: '', status: 'idle' }
 }
 
-function getDay(dateStr) {
-  return dayData[dateStr] || { id: null, hours: '', status: 'idle' }
+function getCell(dateStr, empId) {
+  return records[dateStr]?.[empId] || blankCell()
 }
 
 async function loadMonth() {
-  resetDayData()
-  if (!selectedId.value) return
   loading.value = true
   try {
+    for (const key of Object.keys(records)) delete records[key]
+
     const daysInMonth = new Date(cursorYear.value, cursorMonth.value + 1, 0).getDate()
     for (let d = 1; d <= daysInMonth; d++) {
-      dayData[toDateStr(cursorYear.value, cursorMonth.value, d)] = { id: null, hours: '', status: 'idle' }
+      const dateStr = toDateStr(cursorYear.value, cursorMonth.value, d)
+      const row = {}
+      for (const emp of employees.value) row[emp.id] = blankCell()
+      records[dateStr] = row
     }
-    const records = await AttendanceAPI.list({ employee_id: selectedId.value, month: monthStr.value })
-    for (const r of records) {
+
+    const list = await AttendanceAPI.list({ month: monthStr.value })
+    for (const r of list) {
+      if (!records[r.work_date]) continue
       const hours = r.manual_minutes !== null ? r.manual_minutes / 60 : r.worked_minutes / 60
-      dayData[r.work_date] = { id: r.id, hours, status: 'saved' }
+      records[r.work_date][r.employee_id] = { id: r.id, hours, status: 'saved' }
     }
   } finally {
     loading.value = false
@@ -108,51 +109,67 @@ const calendarCells = computed(() => {
   return cells
 })
 
-async function saveDay(dateStr) {
-  const day = getDay(dateStr)
-  if (day.hours === '' || day.hours === null || Number(day.hours) < 0) {
-    if (day.id) {
-      const idToRemove = day.id
-      dayData[dateStr] = { id: null, hours: '', status: 'idle' }
+async function saveCell(dateStr, empId) {
+  const cell = records[dateStr][empId]
+  if (cell.hours === '' || cell.hours === null || Number(cell.hours) < 0) {
+    if (cell.id) {
+      const idToRemove = cell.id
+      records[dateStr][empId] = blankCell()
       await AttendanceAPI.remove(idToRemove)
     }
     return
   }
-  day.status = 'saving'
+  cell.status = 'saving'
   try {
     const saved = await AttendanceAPI.save({
-      employee_id: selectedId.value,
+      employee_id: empId,
       work_date: dateStr,
-      manual_minutes: Math.round(Number(day.hours) * 60),
+      manual_minutes: Math.round(Number(cell.hours) * 60),
     })
-    day.id = saved.id
-    day.status = 'saved'
+    cell.id = saved.id
+    cell.status = 'saved'
   } catch (e) {
-    day.status = 'error'
+    cell.status = 'error'
   }
 }
 
-function markDirty(dateStr) {
-  getDay(dateStr).status = 'idle'
+function markDirty(dateStr, empId) {
+  records[dateStr][empId].status = 'idle'
 }
 
-function payFor(dateStr) {
-  const day = dayData[dateStr]
-  if (!day || !day.hours || !selectedEmployee.value) return 0
-  return Math.round(Number(day.hours) * selectedEmployee.value.hourly_wage)
+function wageOf(empId) {
+  return employees.value.find((e) => e.id === empId)?.hourly_wage || 0
 }
 
-const monthlyTotalHours = computed(() =>
-  Object.values(dayData).reduce((sum, d) => sum + (Number(d.hours) || 0), 0)
-)
-const monthlyWorkDays = computed(
-  () => Object.values(dayData).filter((d) => Number(d.hours) > 0).length
-)
-const monthlyTotalPay = computed(() =>
-  Math.round(monthlyTotalHours.value * (selectedEmployee.value?.hourly_wage || 0))
-)
+function dayTotalPay(dateStr) {
+  const row = records[dateStr]
+  if (!row) return 0
+  return employees.value.reduce(
+    (sum, emp) => sum + Math.round((Number(row[emp.id]?.hours) || 0) * emp.hourly_wage),
+    0
+  )
+}
 
-watch(selectedId, loadMonth)
+function dayHasHours(dateStr) {
+  const row = records[dateStr]
+  if (!row) return false
+  return Object.values(row).some((c) => Number(c.hours) > 0)
+}
+
+const monthlyTotalHours = computed(() => {
+  let sum = 0
+  for (const row of Object.values(records)) {
+    for (const cell of Object.values(row)) sum += Number(cell.hours) || 0
+  }
+  return sum
+})
+
+const monthlyTotalPay = computed(() => {
+  let sum = 0
+  for (const dateStr of Object.keys(records)) sum += dayTotalPay(dateStr)
+  return sum
+})
+
 watch([cursorYear, cursorMonth], loadMonth)
 
 onMounted(async () => {
@@ -166,7 +183,7 @@ onMounted(async () => {
     <div class="header-row">
       <div>
         <h1 class="title">출퇴근 입력</h1>
-        <p class="text-sub">선생님을 선택하고 날짜별로 근무시간만 입력하세요.</p>
+        <p class="text-sub">달력의 각 날짜에서 직원 전체의 근무시간을 한 번에 입력하세요.</p>
       </div>
     </div>
 
@@ -176,17 +193,11 @@ onMounted(async () => {
     </div>
 
     <template v-else>
-      <div class="emp-picker">
-        <button
-          v-for="emp in employees"
-          :key="emp.id"
-          class="emp-chip"
-          :class="{ active: selectedId === emp.id }"
-          @click="selectedId = emp.id"
-        >
-          <span class="emp-chip-avatar">{{ avatarFor(emp.id) }}</span>
-          <span>{{ emp.name }}</span>
-        </button>
+      <div class="legend">
+        <div v-for="emp in employees" :key="emp.id" class="legend-item">
+          <span class="legend-avatar">{{ avatarFor(emp.id) }}</span>
+          <span class="text-sub">{{ emp.name }}</span>
+        </div>
       </div>
 
       <div class="card month-card">
@@ -204,58 +215,63 @@ onMounted(async () => {
         </div>
 
         <template v-else>
-          <div class="weekday-row">
-            <div
-              v-for="(w, i) in WEEKDAYS"
-              :key="w"
-              class="weekday"
-              :class="{ sun: i === 0, sat: i === 6 }"
-            >
-              {{ w }}
+          <div class="calendar-scroll">
+            <div class="weekday-row">
+              <div
+                v-for="(w, i) in WEEKDAYS"
+                :key="w"
+                class="weekday"
+                :class="{ sun: i === 0, sat: i === 6 }"
+              >
+                {{ w }}
+              </div>
             </div>
-          </div>
 
-          <div class="calendar-grid">
-            <div
-              v-for="(dateStr, idx) in calendarCells"
-              :key="idx"
-              class="day-cell"
-              :class="{
-                empty: !dateStr,
-                today: dateStr === todayStr,
-                sun: dateStr && new Date(dateStr).getDay() === 0,
-                sat: dateStr && new Date(dateStr).getDay() === 6,
-                filled: dateStr && Number(getDay(dateStr).hours) > 0,
-              }"
-            >
-              <template v-if="dateStr">
-                <div class="day-num">{{ Number(dateStr.slice(-2)) }}</div>
-                <input
-                  class="day-input"
-                  type="number"
-                  step="0.5"
-                  min="0"
-                  placeholder="-"
-                  v-model="getDay(dateStr).hours"
-                  @input="markDirty(dateStr)"
-                  @blur="saveDay(dateStr)"
-                />
-                <div class="day-pay" v-if="Number(getDay(dateStr).hours) > 0">
-                  {{ payFor(dateStr).toLocaleString('ko-KR') }}
-                </div>
-                <div
-                  class="day-status"
-                  v-if="getDay(dateStr).status === 'saving'"
-                >
-                  ···
-                </div>
-                <div
-                  class="day-status error"
-                  v-else-if="getDay(dateStr).status === 'error'"
-                >
-                  ⚠
-                </div>
-              </template>
+            <div class="calendar-grid">
+              <div
+                v-for="(dateStr, idx) in calendarCells"
+                :key="idx"
+                class="day-cell"
+                :class="{
+                  empty: !dateStr,
+                  today: dateStr === todayStr,
+                  sun: dateStr && new Date(dateStr).getDay() === 0,
+                  sat: dateStr && new Date(dateStr).getDay() === 6,
+                  filled: dateStr && dayHasHours(dateStr),
+                }"
+              >
+                <template v-if="dateStr">
+                  <div class="day-num">{{ Number(dateStr.slice(-2)) }}</div>
+
+                  <div class="day-emp-list">
+                    <div v-for="emp in employees" :key="emp.id" class="day-emp-row">
+                      <span class="day-emp-avatar">{{ avatarFor(emp.id) }}</span>
+                      <input
+                        class="day-emp-input"
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        placeholder="-"
+                        v-model="records[dateStr][emp.id].hours"
+                        @input="markDirty(dateStr, emp.id)"
+                        @blur="saveCell(dateStr, emp.id)"
+                      />
+                      <span
+                        v-if="records[dateStr][emp.id].status === 'saving'"
+                        class="day-emp-status"
+                      >···</span>
+                      <span
+                        v-else-if="records[dateStr][emp.id].status === 'error'"
+                        class="day-emp-status error"
+                      >⚠</span>
+                    </div>
+                  </div>
+
+                  <div class="day-total" v-if="dayTotalPay(dateStr) > 0">
+                    {{ dayTotalPay(dateStr).toLocaleString('ko-KR') }}원
+                  </div>
+                </template>
+              </div>
             </div>
           </div>
         </template>
@@ -263,8 +279,8 @@ onMounted(async () => {
 
       <div class="card total-bar">
         <div>
-          <div class="text-sub">{{ selectedEmployee?.name }} · {{ monthLabel }}</div>
-          <div class="text-sub">근무 {{ monthlyWorkDays }}일 · {{ monthlyTotalHours.toFixed(1) }}시간</div>
+          <div class="text-sub">{{ monthLabel }} 전체 직원 합계</div>
+          <div class="text-sub">{{ monthlyTotalHours.toFixed(1) }}시간</div>
         </div>
         <div class="amount total-amount">{{ monthlyTotalPay.toLocaleString('ko-KR') }}원</div>
       </div>
@@ -283,36 +299,23 @@ onMounted(async () => {
   margin: 0 0 4px;
 }
 
-.emp-picker {
+.legend {
   display: flex;
-  gap: 8px;
+  gap: 14px;
   overflow-x: auto;
   padding-bottom: 4px;
   margin-bottom: 16px;
 }
 
-.emp-chip {
+.legend-item {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  color: var(--text-sub);
-  font-weight: 600;
-  font-size: 14px;
-  white-space: nowrap;
+  font-size: 13px;
   flex-shrink: 0;
 }
 
-.emp-chip.active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
-}
-
-.emp-chip-avatar {
+.legend-avatar {
   font-size: 16px;
 }
 
@@ -338,10 +341,15 @@ onMounted(async () => {
   font-size: 16px;
 }
 
+.calendar-scroll {
+  overflow-x: auto;
+}
+
 .weekday-row {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(96px, 1fr));
   margin-bottom: 6px;
+  min-width: 672px;
 }
 
 .weekday {
@@ -362,23 +370,21 @@ onMounted(async () => {
 
 .calendar-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(96px, 1fr));
   gap: 6px;
+  min-width: 672px;
 }
 
 .day-cell {
   position: relative;
-  aspect-ratio: 1 / 1;
-  min-height: 64px;
+  min-height: 100px;
   border-radius: 12px;
   background: var(--bg);
   border: 1px solid transparent;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 4px 2px;
+  gap: 4px;
+  padding: 6px;
 }
 
 .day-cell.empty {
@@ -396,9 +402,6 @@ onMounted(async () => {
 .day-num {
   font-size: 11px;
   color: var(--text-sub);
-  position: absolute;
-  top: 6px;
-  left: 8px;
 }
 
 .day-cell.sun .day-num {
@@ -409,44 +412,63 @@ onMounted(async () => {
   color: #5B84C4;
 }
 
-.day-input {
-  width: 80%;
+.day-emp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.day-emp-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.day-emp-avatar {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.day-emp-input {
+  width: 0;
+  flex: 1;
+  min-width: 0;
   border: none;
   background: transparent;
-  text-align: center;
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text);
-  padding: 0;
-  margin-top: 6px;
+  padding: 1px 0;
 }
 
-.day-input:focus {
+.day-emp-input:focus {
   outline: none;
+  background: var(--surface);
+  border-radius: 4px;
 }
 
-.day-input::-webkit-outer-spin-button,
-.day-input::-webkit-inner-spin-button {
+.day-emp-input::-webkit-outer-spin-button,
+.day-emp-input::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
 
-.day-pay {
-  font-size: 10px;
-  color: var(--primary-dark);
-  font-weight: 600;
-}
-
-.day-status {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  font-size: 10px;
+.day-emp-status {
+  font-size: 9px;
   color: var(--text-sub);
+  flex-shrink: 0;
 }
 
-.day-status.error {
+.day-emp-status.error {
   color: #C2694F;
+}
+
+.day-total {
+  margin-top: auto;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--primary-dark);
+  text-align: right;
 }
 
 .total-bar {
@@ -459,18 +481,5 @@ onMounted(async () => {
 
 .total-amount {
   font-size: 20px;
-}
-
-@media (max-width: 560px) {
-  .day-cell {
-    min-height: 52px;
-    border-radius: 10px;
-  }
-  .day-input {
-    font-size: 14px;
-  }
-  .day-pay {
-    display: none;
-  }
 }
 </style>
