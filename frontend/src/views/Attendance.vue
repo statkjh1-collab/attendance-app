@@ -138,8 +138,25 @@ function markDirty(dateStr, empId) {
   if (records[dateStr]?.[empId]) records[dateStr][empId].status = 'idle'
 }
 
-function wageOf(empId) {
-  return employees.value.find((e) => e.id === empId)?.hourly_wage || 0
+const inputEls = {}
+function setInputRef(dateStr, empId, el) {
+  const key = `${dateStr}|${empId}`
+  if (el) inputEls[key] = el
+  else delete inputEls[key]
+}
+
+function focusCell(dateStr, empId) {
+  inputEls[`${dateStr}|${empId}`]?.focus()
+}
+
+function onEnter(dateStr, empId) {
+  const idx = employees.value.findIndex((e) => e.id === empId)
+  const next = employees.value[idx + 1]
+  if (next) {
+    focusCell(dateStr, next.id)
+  } else {
+    inputEls[`${dateStr}|${empId}`]?.blur()
+  }
 }
 
 function dayTotalPay(dateStr) {
@@ -249,6 +266,7 @@ onMounted(async () => {
                       <span class="day-emp-avatar">{{ avatarFor(emp.id) }}</span>
                       <span class="day-emp-name">{{ emp.name }}</span>
                       <input
+                        :ref="(el) => setInputRef(dateStr, emp.id, el)"
                         class="day-emp-input"
                         type="number"
                         step="0.5"
@@ -257,6 +275,7 @@ onMounted(async () => {
                         v-model="getCell(dateStr, emp.id).hours"
                         @input="markDirty(dateStr, emp.id)"
                         @blur="saveCell(dateStr, emp.id)"
+                        @keydown.enter.prevent="onEnter(dateStr, emp.id)"
                       />
                       <span
                         v-if="getCell(dateStr, emp.id).status === 'saving'"
@@ -266,6 +285,10 @@ onMounted(async () => {
                         v-else-if="getCell(dateStr, emp.id).status === 'error'"
                         class="day-emp-status error"
                       >⚠</span>
+                      <span
+                        v-else-if="getCell(dateStr, emp.id).status === 'saved'"
+                        class="day-emp-status saved"
+                      >✓</span>
                     </div>
                   </div>
 
@@ -473,6 +496,11 @@ onMounted(async () => {
 
 .day-emp-status.error {
   color: #C2694F;
+}
+
+.day-emp-status.saved {
+  color: var(--primary-dark);
+  font-weight: 700;
 }
 
 .day-total {
