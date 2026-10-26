@@ -84,6 +84,12 @@ Render 대시보드 → New → Static Site → 같은 저장소 선택 후:
 
 백엔드 `main.py`의 CORS 설정은 기본적으로 모든 origin을 허용합니다. 운영 환경에서 도메인을 제한하고 싶다면 `backend/main.py`의 `allow_origins`를 실제 프론트엔드 도메인으로 좁혀주세요.
 
+### 4-5. Supabase 자동 일시정지 방지
+
+Supabase 무료 플랜은 **7일간 API 호출이 없으면 프로젝트를 자동으로 일시정지(pause)** 합니다. 일시정지되면 앱이 전부 에러를 내고, 대시보드에서 수동으로 "Restore" 해야 복구됩니다.
+
+`.github/workflows/keep-alive.yml` 이 GitHub Actions로 **3일마다 백엔드를 자동 호출**해서 이를 방지합니다. 이 저장소를 GitHub에 push하면 별도 설정 없이 자동으로 동작합니다(저장소 Actions 탭에서 실행 여부 확인 가능).
+
 ## 급여 계산 방식
 
 - `manual_minutes`(근무시간 직접 입력)가 있으면 그 값을 우선 사용합니다.

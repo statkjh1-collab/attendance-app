@@ -1,0 +1,16 @@
+name: Keep backend and Supabase alive
+
+on:
+  schedule:
+    # 3일마다 실행 (Supabase 무료 플랜의 7일 비활성 자동 일시정지 방지)
+    - cron: "0 3 */3 * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend (which queries Supabase)
+        run: |
+          curl -sf --max-time 60 "https://attendance-app-hl1v.onrender.com/employees" > /dev/null
+          echo "Pinged backend successfully"
